@@ -1,0 +1,120 @@
+name: Check for new releases
+
+on:
+  schedule:
+    - cron: "0 * * * *" # Every hour
+  workflow_dispatch: # Allow manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  check-releases:
+    runs-on: arc-runner-homebrew-tap
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check and update casks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          updated=0
+
+          for cask_file in Casks/*.rb; do
+            [ -f "$cask_file" ] || continue
+
+            cask_name=$(basename "$cask_file" .rb)
+            echo "::group::Checking $cask_name"
+
+            # Extract current version
+            current_version=$(grep -m1 'version "' "$cask_file" | sed 's/.*version "//;s/".*//')
+
+            # Extract homepage to determine GitHub repo
+            homepage=$(grep -m1 'homepage "' "$cask_file" | sed 's/.*homepage "//;s/".*//')
+
+            # Only process GitHub-hosted casks
+            if [[ ! "$homepage" =~ ^https://github.com/ ]]; then
+              echo "Skipping: not a GitHub project"
+              echo "::endgroup::"
+              continue
+            fi
+
+            repo=$(echo "$homepage" | sed 's|https://github.com/||;s|/$||')
+
+            # Get latest release tag
+            latest_tag=$(gh api "repos/$repo/releases/latest" --jq '.tag_name' 2>/dev/null) || {
+              echo "Skipping: no releases found for $repo"
+              echo "::endgroup::"
+              continue
+            }
+            latest_version="${latest_tag#v}"
+
+            if [ "$current_version" = "$latest_version" ]; then
+              echo "Up to date ($current_version)"
+              echo "::endgroup::"
+              continue
+            fi
+
+            echo "New version found: $current_version -> $latest_version"
+
+            # Extract URL templates and current sha256 values (in order of appearance)
+            mapfile -t url_templates < <(grep 'url "' "$cask_file" | sed 's/.*url "//;s/".*//')
+            mapfile -t old_shas < <(grep 'sha256 "' "$cask_file" | sed 's/.*sha256 "//;s/".*//')
+
+            if [ "${#url_templates[@]}" -ne "${#old_shas[@]}" ]; then
+              echo "::warning::Skipping $cask_name: url count (${#url_templates[@]}) != sha256 count (${#old_shas[@]})"
+              echo "::endgroup::"
+              continue
+            fi
+
+            # Download each asset with the new version and compute sha256
+            new_shas=()
+            failed=false
+            for url_template in "${url_templates[@]}"; do
+              download_url=$(echo "$url_template" | sed "s/#{version}/$latest_version/g")
+              echo "Downloading: $download_url"
+
+              new_sha=$(curl -fsSL "$download_url" | sha256sum | awk '{print $1}') || {
+                echo "::warning::Failed to download: $download_url"
+                failed=true
+                break
+              }
+
+              echo "SHA256: $new_sha"
+              new_shas+=("$new_sha")
+            done
+
+            if [ "$failed" = true ]; then
+              echo "Skipping $cask_name due to download failure"
+              echo "::endgroup::"
+              continue
+            fi
+
+            # Update version
+            sed -i "s/version \"$current_version\"/version \"$latest_version\"/" "$cask_file"
+
+            # Update sha256 values in order of appearance
+            for i in "${!old_shas[@]}"; do
+              sed -i "s/${old_shas[$i]}/${new_shas[$i]}/" "$cask_file"
+            done
+
+            # Commit this cask individually for clean history
+            git add "$cask_file"
+            git commit -m "Update $cask_name cask to v$latest_version"
+
+            updated=$((updated + 1))
+            echo "::endgroup::"
+          done
+
+          if [ "$updated" -gt 0 ]; then
+            echo "### $updated cask(s) updated" >> "$GITHUB_STEP_SUMMARY"
+            git push
+          else
+            echo "### All casks up to date" >> "$GITHUB_STEP_SUMMARY"
+            echo "All casks are up to date"
+          fi
