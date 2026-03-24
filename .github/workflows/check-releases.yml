@@ -76,11 +76,11 @@ jobs:
             new_shas=()
             failed=false
             for url_template in "${url_templates[@]}"; do
-              download_url=$(echo "$url_template" | sed "s/#{version}/$latest_version/g")
-              echo "Downloading: $download_url"
+              asset_name=$(basename "$url_template")
+              echo "Downloading: $asset_name from $repo v$latest_version"
 
-              new_sha=$(curl -fsSL "$download_url" | sha256sum | awk '{print $1}') || {
-                echo "::warning::Failed to download: $download_url"
+              new_sha=$(gh release download "v$latest_version" --repo "$repo" --pattern "$asset_name" --output - | sha256sum | awk '{print $1}') || {
+                echo "::warning::Failed to download: $asset_name"
                 failed=true
                 break
               }
