@@ -1,14 +1,14 @@
 cask "archcanvas" do
-  version "0.3.1"
+  version "0.3.2"
 
   on_arm do
     url "https://github.com/dangtrivan15/archcanvas/releases/download/v#{version}/ArchCanvas-aarch64.dmg"
-    sha256 "1347b761f7a492be69929cbb5a3512429b9f03bd2e6efbf1f23c5ebcad20667d"
+    sha256 "173dc72c6db0ae9dfa17690cf1c24cb5b6b54f5c2ee90936fcf16d35f3149378"
   end
 
   on_intel do
     url "https://github.com/dangtrivan15/archcanvas/releases/download/v#{version}/ArchCanvas-x64.dmg"
-    sha256 "06200c80e9ac8b3bf36c7626b892fba8971f5787536c482eb14dc3485cabaa6d"
+    sha256 "177d0784ddae9ac379b64f50550d6da531d825657dafcb9eb304b7e45264c80e"
   end
 
   name "ArchCanvas"
