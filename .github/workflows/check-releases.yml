@@ -8,9 +8,16 @@ on:
 permissions:
   contents: write
 
+# cancel-in-progress: false because the job commits per-cask and pushes at
+# the end -- cancelling mid-loop would leave staged commits unpushed.
+concurrency:
+  group: check-releases
+  cancel-in-progress: false
+
 jobs:
   check-releases:
     runs-on: arc-runner-homebrew-tap
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
