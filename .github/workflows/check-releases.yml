@@ -5,8 +5,11 @@ on:
     - cron: "0 * * * *" # Every hour
   workflow_dispatch: # Allow manual trigger
 
+# Read-only: this token no longer pushes. It authenticates the `gh` calls that
+# read releases from the upstream project repos, which is a public-read operation.
+# The push is made with the App token minted in the job below.
 permissions:
-  contents: write
+  contents: read
 
 # cancel-in-progress: false because the job commits per-cask and pushes at
 # the end -- cancelling mid-loop would leave staged commits unpushed.
@@ -19,7 +22,30 @@ jobs:
     runs-on: arc-runner-homebrew-tap
     timeout-minutes: 10
     steps:
+      # The default GITHUB_TOKEN pushes as github-actions[bot], which is not a
+      # bypass actor on main's ruleset -- the ruleset requires a pull request
+      # and verified signatures, so a direct push is rejected with GH013 on both
+      # counts. This App *is* a bypass actor, and a bypass applies to the whole
+      # ruleset at once, so pushing as it clears both rules without the commits
+      # needing to be signed.
+      #
+      # owner/repositories are deliberately omitted: the token then defaults to
+      # this repository alone. permission-contents pins it to the single
+      # permission the push needs, so this token cannot reach the App's other
+      # permissions or its other installations even though the App holds them.
+      - name: Mint push token
+        id: push-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.PUSH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_APP_PRIVATE_KEY }}
+          permission-contents: write
+
       - uses: actions/checkout@v4
+        with:
+          # Persisted into http.extraheader, which is what `git push` at the end
+          # of the run authenticates with.
+          token: ${{ steps.push-token.outputs.token }}
 
       - name: Check and update casks
         env:
