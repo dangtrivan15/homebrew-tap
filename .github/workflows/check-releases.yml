@@ -22,23 +22,55 @@ jobs:
     runs-on: arc-runner-homebrew-tap
     timeout-minutes: 10
     steps:
-      # The default GITHUB_TOKEN pushes as github-actions[bot], which is not a
-      # bypass actor on main's ruleset -- the ruleset requires a pull request
-      # and verified signatures, so a direct push is rejected with GH013 on both
-      # counts. This App *is* a bypass actor, and a bypass applies to the whole
-      # ruleset at once, so pushing as it clears both rules without the commits
-      # needing to be signed.
+      # The App credentials arrive as runner container environment, injected from a
+      # SOPS-encrypted Secret in the cluster repo rather than set by hand as Actions
+      # secrets, so the credential is version-controlled and rotates by commit.
       #
-      # owner/repositories are deliberately omitted: the token then defaults to
-      # this repository alone. permission-contents pins it to the single
-      # permission the push needs, so this token cannot reach the App's other
-      # permissions or its other installations even though the App holds them.
+      # Runner env is not visible to the `secrets` or `env` expression contexts -- only
+      # to the shell inside a `run:` step -- so it has to be promoted into $GITHUB_ENV
+      # before the token action, which reads inputs only, can be handed it.
+      #
+      # ::add-mask:: per line matters here: an Actions secret is masked in logs
+      # automatically, runner env is not. Without this the PEM would print in clear the
+      # first time any step echoed its environment.
+      - name: Load App credentials from the runner environment
+        run: |
+          set -euo pipefail
+
+          if [ -z "${PUSH_APP_CLIENT_ID:-}" ] || [ -z "${PUSH_APP_PRIVATE_KEY:-}" ]; then
+            echo "App creds missing from the runner environment -- is the" \
+                 "github-app-homebrew-tap-push Secret wired onto this runner?" >&2
+            exit 1
+          fi
+
+          while IFS= read -r _line; do
+            if [ -n "$_line" ]; then echo "::add-mask::$_line"; fi
+          done <<< "$PUSH_APP_PRIVATE_KEY"
+
+          {
+            echo "PUSH_APP_CLIENT_ID=$PUSH_APP_CLIENT_ID"
+            echo "PUSH_APP_PRIVATE_KEY<<__PEM_EOF__"
+            printf '%s\n' "$PUSH_APP_PRIVATE_KEY"
+            echo "__PEM_EOF__"
+          } >> "$GITHUB_ENV"
+
+      # The default GITHUB_TOKEN pushes as github-actions[bot], which is not a bypass
+      # actor on main's ruleset -- the ruleset requires a pull request and verified
+      # signatures, so a direct push is rejected with GH013 on both counts. A ruleset
+      # bypass is evaluated per-actor and covers the whole ruleset at once, so pushing
+      # as an App on the bypass list clears both rules without the commits needing to
+      # be signed. A token's identity cannot be changed, only its permissions, which is
+      # why this needs a separate credential rather than a permissions tweak.
+      #
+      # owner/repositories are deliberately omitted: the token then defaults to this
+      # repository alone. permission-contents pins it to the single permission the push
+      # needs, so a token lifted out of this job cannot reach anything else.
       - name: Mint push token
         id: push-token
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ secrets.PUSH_APP_CLIENT_ID }}
-          private-key: ${{ secrets.PUSH_APP_PRIVATE_KEY }}
+          client-id: ${{ env.PUSH_APP_CLIENT_ID }}
+          private-key: ${{ env.PUSH_APP_PRIVATE_KEY }}
           permission-contents: write
 
       - uses: actions/checkout@v4
